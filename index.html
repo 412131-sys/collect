@@ -15,9 +15,15 @@
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
-<body class="bg-[#F8F9FD] text-slate-700">
+<body class="bg-[#F8F9FD] text-slate-700 flex flex-col h-screen overflow-hidden">
 
-    <div id="app" class="flex h-screen overflow-hidden">
+    <!-- 網域未授權警告橫幅 -->
+    <div id="auth-error-banner" class="hidden bg-red-50 border-b border-red-200 text-red-600 px-6 py-3 text-sm flex items-center justify-center gap-2 shrink-0 z-50 shadow-sm">
+        <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+        <span><strong>網域未授權：</strong> Firebase 拒絕了連線。請至 Firebase Console &gt; Authentication &gt; Settings &gt; Authorized domains，將目前的網址加入白名單中。</span>
+    </div>
+
+    <div id="app" class="flex flex-1 overflow-hidden">
         <!-- 側邊導覽欄 -->
         <aside class="w-64 bg-white border-r border-slate-100 flex flex-col shrink-0">
             <div class="p-6 flex items-center gap-3">
@@ -40,6 +46,14 @@
             <!-- 使用者資訊 -->
             <div id="user-section" class="p-4 border-t border-slate-100">
                 <!-- 登入狀態將由 JS 動態生成 -->
+                <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
+                    <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400">
+                        <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs font-bold text-slate-500">正在初始化連線...</p>
+                    </div>
+                </div>
             </div>
         </aside>
 
@@ -56,35 +70,36 @@
                     />
                 </div>
                 <button 
+                    id="add-btn"
                     onclick="openModal()"
-                    class="flex-shrink-0 flex items-center gap-2 bg-[#5B50E6] text-white px-5 py-2.5 rounded-xl font-medium shadow-lg shadow-indigo-100 hover:bg-[#4A40D0] transition-all active:scale-95"
+                    class="flex-shrink-0 flex items-center gap-2 bg-[#5B50E6] text-white px-5 py-2.5 rounded-xl font-medium shadow-lg shadow-indigo-100 hover:bg-[#4A40D0] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     <i data-lucide="plus" class="w-4.5 h-4.5"></i>
                     <span>新增收藏</span>
                 </button>
             </header>
 
-            <div class="flex-1 p-8 overflow-y-auto">
+            <div class="flex-1 p-8 overflow-y-auto relative">
                 <div class="mb-8 flex justify-between items-end">
                     <div>
                         <h2 id="current-category-title" class="text-2xl font-bold text-slate-800">全部</h2>
-                        <p id="result-count" class="text-sm text-slate-400 mt-1">正在載入數據...</p>
+                        <p id="result-count" class="text-sm text-slate-400 mt-1">正在等待授權與資料載入...</p>
                     </div>
                 </div>
 
                 <!-- 內容顯示區 -->
-                <div id="items-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div id="items-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 hidden">
                     <!-- 收藏項目將由 JS 動態生成 -->
                 </div>
 
                 <!-- 空狀態提示 -->
-                <div id="empty-state" class="hidden w-full aspect-[16/9] max-h-[500px] bg-white rounded-[32px] border-2 border-dashed border-slate-100 flex flex-col items-center justify-center p-12 text-center">
+                <div id="empty-state" class="w-full aspect-[16/9] max-h-[500px] bg-white rounded-[32px] border-2 border-dashed border-slate-100 flex flex-col items-center justify-center p-12 text-center">
                     <div class="w-20 h-20 bg-[#F1F4F9] rounded-full flex items-center justify-center mb-6">
-                        <i data-lucide="folder" class="text-[#5B50E6]/30 w-8 h-8"></i>
+                        <i id="empty-icon" data-lucide="folder" class="text-[#5B50E6]/30 w-8 h-8"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-slate-800 mb-2">這裡目前沒有任何收藏</h3>
-                    <p class="text-slate-400 max-w-xs mb-8">目前的分類下沒有資料。點擊按鈕寫入第一筆收藏。</p>
-                    <button onclick="openModal()" class="bg-[#5B50E6] text-white px-8 py-3 rounded-xl font-bold shadow-xl shadow-indigo-100 hover:scale-105 transition-transform">
+                    <h3 id="empty-title" class="text-xl font-bold text-slate-800 mb-2">準備連線中</h3>
+                    <p id="empty-desc" class="text-slate-400 max-w-xs mb-8">請等待系統建立安全連線...</p>
+                    <button id="empty-btn" onclick="openModal()" class="bg-[#5B50E6] text-white px-8 py-3 rounded-xl font-bold shadow-xl shadow-indigo-100 hover:scale-105 transition-transform hidden">
                         立即寫入資料
                     </button>
                 </div>
@@ -129,7 +144,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase 配置
         const firebaseConfig = {
@@ -153,6 +168,7 @@
         let allItems = [];
         let currentTab = '全部';
         let base64Image = "";
+        let domainErrorOccurred = false;
 
         const categories = [
             { id: 'all', name: '全部', icon: 'tag' },
@@ -164,27 +180,50 @@
             { id: 'others', name: '其他', icon: 'tag' }
         ];
 
-        // 初始化驗證流程 (修正 unauthorized-domain 報錯問題)
+        // 顯示網域錯誤提示
+        function handleDomainError() {
+            domainErrorOccurred = true;
+            document.getElementById('auth-error-banner').classList.remove('hidden');
+            document.getElementById('add-btn').disabled = true;
+            
+            const userSection = document.getElementById('user-section');
+            userSection.innerHTML = `
+                <div class="flex items-center gap-3 p-2 bg-red-50 border border-red-100 rounded-xl text-red-600">
+                    <i data-lucide="shield-alert" class="w-5 h-5"></i>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs font-bold truncate">無法登入</p>
+                        <p class="text-[10px] truncate">網域未經授權</p>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('empty-title').innerText = "無法載入資料庫";
+            document.getElementById('empty-desc').innerText = "因為目前的網址未加入 Firebase 的授權名單中，安全機制已阻擋連線。";
+            document.getElementById('empty-icon').setAttribute('data-lucide', 'x-circle');
+            document.getElementById('empty-btn').classList.add('hidden');
+            document.getElementById('result-count').innerText = "連線失敗";
+            
+            lucide.createIcons();
+        }
+
+        // 初始化驗證流程
         async function initAuth() {
             try {
-                // 優先嘗試使用環境提供的 token
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     try {
                         await signInWithCustomToken(auth, __initial_auth_token);
                     } catch (tokenErr) {
-                        console.warn("Custom token failed, falling back to anonymous.");
+                        console.warn("Custom token failed, attempting anonymous login...");
                         await signInAnonymously(auth);
                     }
                 } else {
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                // 如果是 unauthorized-domain，捕獲它並保持匿名狀態或引導使用者
-                if (err.code === 'auth/unauthorized-domain') {
-                    console.error("Domain not authorized in Firebase Console. Using local state or anonymous if possible.");
-                    // 即使網域未授權，signInAnonymously 通常也會受限，但在這裡捕獲避免 crash
-                } else {
-                    console.error("Auth initialization failed:", err);
+                console.error("Auth initialization failed:", err);
+                // 精準捕捉網域未授權錯誤
+                if (err.code === 'auth/unauthorized-domain' || err.message.includes('unauthorized-domain')) {
+                    handleDomainError();
                 }
             }
         }
@@ -195,7 +234,7 @@
             const select = document.getElementById('item-category');
             
             nav.innerHTML = categories.map(cat => `
-                <button onclick="window.setCategory('${cat.name}')" id="cat-btn-${cat.name}" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-slate-500 hover:bg-slate-50">
+                <button onclick="window.setCategory('${cat.name}')" id="cat-btn-${cat.name}" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-slate-500 hover:bg-slate-50 disabled:opacity-50">
                     <div class="flex items-center gap-3">
                         <i data-lucide="${cat.icon}" class="w-4.5 h-4.5"></i>
                         <span class="font-medium text-sm">${cat.name}</span>
@@ -225,11 +264,13 @@
                 }
             });
             document.getElementById('current-category-title').innerText = currentTab;
-            renderItems();
+            if (!domainErrorOccurred) renderItems();
         }
 
         // 渲染收藏項目
         function renderItems() {
+            if (domainErrorOccurred) return;
+
             const grid = document.getElementById('items-grid');
             const empty = document.getElementById('empty-state');
             const searchInput = document.getElementById('search-input');
@@ -258,6 +299,11 @@
             if (filtered.length === 0) {
                 grid.classList.add('hidden');
                 empty.classList.remove('hidden');
+                document.getElementById('empty-icon').setAttribute('data-lucide', 'folder');
+                document.getElementById('empty-title').innerText = "這裡目前沒有任何收藏";
+                document.getElementById('empty-desc').innerText = "目前的分類下沒有資料。點擊按鈕寫入第一筆收藏。";
+                if(currentUser) document.getElementById('empty-btn').classList.remove('hidden');
+                lucide.createIcons();
             } else {
                 grid.classList.remove('hidden');
                 empty.classList.add('hidden');
@@ -281,29 +327,49 @@
             }
         }
 
-        // Auth 監聽
+        // Auth 狀態監聽 (不再在此處自動執行 signInAnonymously 避免無限迴圈)
         onAuthStateChanged(auth, (user) => {
+            if (domainErrorOccurred) return; // 若確定網域錯誤，停止後續處理
+            
             currentUser = user;
-            updateUserUI();
             if (user) {
+                updateUserUI();
                 startDataSync();
+            } else {
+                // 如果是被登出，顯示未登入狀態
+                const userSection = document.getElementById('user-section');
+                userSection.innerHTML = `
+                    <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
+                        <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400"><i data-lucide="user" class="w-4 h-4"></i></div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-xs font-bold truncate">尚未登入</p>
+                            <p class="text-[10px] text-slate-400">點擊登入以同步</p>
+                        </div>
+                        <button onclick="window.login()" class="text-[#5B50E6] hover:scale-110 transition-transform"><i data-lucide="log-in" class="w-4 h-4"></i></button>
+                    </div>
+                `;
+                lucide.createIcons();
+                document.getElementById('empty-title').innerText = "請先登入帳號";
+                document.getElementById('empty-desc').innerText = "需要身分驗證才能載入您的個人收藏庫。";
+                document.getElementById('empty-btn').classList.add('hidden');
+                document.getElementById('result-count').innerText = "未連線";
             }
         });
 
         function updateUserUI() {
+            if (!currentUser) return;
             const userSection = document.getElementById('user-section');
-            if (!currentUser || currentUser.isAnonymous) {
+            if (currentUser.isAnonymous) {
                 userSection.innerHTML = `
                     <div class="flex flex-col gap-2">
                         <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
-                            <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400"><i data-lucide="user" class="w-4 h-4"></i></div>
+                            <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400"><i data-lucide="ghost" class="w-4 h-4"></i></div>
                             <div class="flex-1 min-w-0">
                                 <p class="text-xs font-bold truncate">訪客模式</p>
-                                <p class="text-[10px] text-slate-400">登入受限於網域授權</p>
+                                <p class="text-[10px] text-slate-400">資料僅暫存</p>
                             </div>
-                            <button onclick="window.login()" class="text-[#5B50E6] hover:scale-110 transition-transform"><i data-lucide="log-in" class="w-4 h-4"></i></button>
+                            <button onclick="window.login()" class="text-[#5B50E6] hover:scale-110 transition-transform" title="登入以永久保存"><i data-lucide="log-in" class="w-4 h-4"></i></button>
                         </div>
-                        <p class="text-[9px] text-amber-500 px-2 leading-tight">注意：若 Google 登入失敗，請檢查 Firebase Console 的授權網域設定。</p>
                     </div>
                 `;
             } else {
@@ -312,7 +378,7 @@
                         <img src="${currentUser.photoURL || 'https://via.placeholder.com/32'}" class="w-8 h-8 rounded-full border border-white shadow-sm">
                         <div class="flex-1 min-w-0">
                             <p class="text-xs font-bold truncate">${currentUser.displayName || '使用者'}</p>
-                            <p class="text-[10px] text-slate-400 truncate">已同步雲端庫</p>
+                            <p class="text-[10px] text-slate-400 truncate">已連線至雲端</p>
                         </div>
                         <button onclick="window.logout()" class="text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="log-out" class="w-4 h-4"></i></button>
                     </div>
@@ -325,7 +391,6 @@
         let unsubscribeSync = null;
         function startDataSync() {
             if (unsubscribeSync) unsubscribeSync();
-            // 遵循 RULE 1 路徑
             const itemsCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'items');
             unsubscribeSync = onSnapshot(itemsCol, (snapshot) => {
                 allItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -364,7 +429,7 @@
             addForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 if (!currentUser) {
-                    alert("身分驗證尚未就緒，請稍後再試。");
+                    alert("請先登入後再新增收藏！");
                     return;
                 }
                 const title = document.getElementById('item-title').value;
@@ -385,7 +450,7 @@
                     lucide.createIcons();
                 } catch (err) {
                     console.error("Save error:", err);
-                    alert("儲存失敗，請檢查權限或網域授權。");
+                    alert("儲存失敗，請確認網路狀態與權限。");
                 }
             });
         }
@@ -401,28 +466,31 @@
             try {
                 await signInWithPopup(auth, provider);
             } catch (err) {
-                if (err.code === 'auth/unauthorized-domain') {
-                    alert("登入失敗：此網域尚未在 Firebase 中授權。請在 Firebase Console -> Authentication -> Settings -> Authorized Domains 加入此網域。");
+                if (err.code === 'auth/unauthorized-domain' || err.message.includes('unauthorized-domain')) {
+                    handleDomainError();
                 } else {
                     console.error("Login failed:", err);
                 }
             }
         };
+        
         window.logout = () => signOut(auth).then(() => window.location.reload());
+        
         window.setCategory = (name) => {
             currentTab = name;
             updateActiveTabUI();
         };
 
         // 初始化啟動
-        initAuth();
         initCategoryUI();
+        initAuth();
 
     </script>
 
     <script>
         // Modal 控制邏輯
         function openModal() {
+            if(document.getElementById('add-btn').disabled) return;
             const modal = document.getElementById('modal');
             const content = document.getElementById('modal-content');
             modal.classList.replace('hidden', 'flex');
