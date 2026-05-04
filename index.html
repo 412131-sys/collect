@@ -128,7 +128,7 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase 配置
@@ -146,7 +146,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         const provider = new GoogleAuthProvider();
-        const appId = "collection-app-html";
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'collection-app-html';
 
         // 全域狀態
         let currentUser = null;
@@ -163,6 +163,31 @@
             { id: 'art', name: '藝術品', icon: 'palette' },
             { id: 'others', name: '其他', icon: 'tag' }
         ];
+
+        // 初始化驗證流程 (修正 unauthorized-domain 報錯問題)
+        async function initAuth() {
+            try {
+                // 優先嘗試使用環境提供的 token
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } catch (tokenErr) {
+                        console.warn("Custom token failed, falling back to anonymous.");
+                        await signInAnonymously(auth);
+                    }
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                // 如果是 unauthorized-domain，捕獲它並保持匿名狀態或引導使用者
+                if (err.code === 'auth/unauthorized-domain') {
+                    console.error("Domain not authorized in Firebase Console. Using local state or anonymous if possible.");
+                    // 即使網域未授權，signInAnonymously 通常也會受限，但在這裡捕獲避免 crash
+                } else {
+                    console.error("Auth initialization failed:", err);
+                }
+            }
+        }
 
         // 初始化分類 UI
         function initCategoryUI() {
@@ -191,10 +216,12 @@
         function updateActiveTabUI() {
             categories.forEach(cat => {
                 const btn = document.getElementById(`cat-btn-${cat.name}`);
-                if (cat.name === currentTab) {
-                    btn.className = "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all bg-[#EEEDFF] text-[#5B50E6]";
-                } else {
-                    btn.className = "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-slate-500 hover:bg-slate-50";
+                if (btn) {
+                    if (cat.name === currentTab) {
+                        btn.className = "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all bg-[#EEEDFF] text-[#5B50E6]";
+                    } else {
+                        btn.className = "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-slate-500 hover:bg-slate-50";
+                    }
                 }
             });
             document.getElementById('current-category-title').innerText = currentTab;
@@ -205,7 +232,8 @@
         function renderItems() {
             const grid = document.getElementById('items-grid');
             const empty = document.getElementById('empty-state');
-            const search = document.getElementById('search-input').value.toLowerCase();
+            const searchInput = document.getElementById('search-input');
+            const search = searchInput ? searchInput.value.toLowerCase() : "";
             
             const filtered = allItems.filter(item => {
                 const matchCat = currentTab === '全部' || item.category === currentTab;
@@ -215,11 +243,17 @@
 
             // 更新數量標籤
             categories.forEach(cat => {
-                const count = cat.name === '全部' ? allItems.length : allItems.filter(i => i.category === cat.name).length;
-                document.getElementById(`count-${cat.name}`).innerText = count;
+                const countElem = document.getElementById(`count-${cat.name}`);
+                if (countElem) {
+                    const count = cat.name === '全部' ? allItems.length : allItems.filter(i => i.category === cat.name).length;
+                    countElem.innerText = count;
+                }
             });
 
-            document.getElementById('result-count').innerText = `顯示 ${filtered.length} 項結果`;
+            const resultCountElem = document.getElementById('result-count');
+            if (resultCountElem) {
+                resultCountElem.innerText = `顯示 ${filtered.length} 項結果`;
+            }
 
             if (filtered.length === 0) {
                 grid.classList.add('hidden');
@@ -248,43 +282,39 @@
         }
 
         // Auth 監聽
-        onAuthStateChanged(auth, async (user) => {
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            updateUserUI();
             if (user) {
-                currentUser = user;
-                updateUserUI();
                 startDataSync();
-            } else {
-                // 嘗試匿名登入作為後備
-                try {
-                    await signInAnonymously(auth);
-                } catch (e) {
-                    console.error("Auth error", e);
-                }
             }
         });
 
         function updateUserUI() {
             const userSection = document.getElementById('user-section');
-            if (currentUser.isAnonymous) {
+            if (!currentUser || currentUser.isAnonymous) {
                 userSection.innerHTML = `
-                    <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
-                        <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400"><i data-lucide="user" class="w-4 h-4"></i></div>
-                        <div class="flex-1 min-w-0">
-                            <p class="text-xs font-bold truncate">訪客模式</p>
-                            <p class="text-[10px] text-slate-400">尚未登入帳號</p>
+                    <div class="flex flex-col gap-2">
+                        <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
+                            <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400"><i data-lucide="user" class="w-4 h-4"></i></div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-xs font-bold truncate">訪客模式</p>
+                                <p class="text-[10px] text-slate-400">登入受限於網域授權</p>
+                            </div>
+                            <button onclick="window.login()" class="text-[#5B50E6] hover:scale-110 transition-transform"><i data-lucide="log-in" class="w-4 h-4"></i></button>
                         </div>
-                        <button onclick="window.login()" class="text-[#5B50E6]"><i data-lucide="log-in" class="w-4 h-4"></i></button>
+                        <p class="text-[9px] text-amber-500 px-2 leading-tight">注意：若 Google 登入失敗，請檢查 Firebase Console 的授權網域設定。</p>
                     </div>
                 `;
             } else {
                 userSection.innerHTML = `
                     <div class="flex items-center gap-3 p-2 bg-slate-50 rounded-xl">
-                        <img src="${currentUser.photoURL}" class="w-8 h-8 rounded-full border border-white shadow-sm">
+                        <img src="${currentUser.photoURL || 'https://via.placeholder.com/32'}" class="w-8 h-8 rounded-full border border-white shadow-sm">
                         <div class="flex-1 min-w-0">
-                            <p class="text-xs font-bold truncate">${currentUser.displayName}</p>
-                            <p class="text-[10px] text-slate-400 truncate">已同步雲端</p>
+                            <p class="text-xs font-bold truncate">${currentUser.displayName || '使用者'}</p>
+                            <p class="text-[10px] text-slate-400 truncate">已同步雲端庫</p>
                         </div>
-                        <button onclick="window.logout()" class="text-slate-400 hover:text-red-500"><i data-lucide="log-out" class="w-4 h-4"></i></button>
+                        <button onclick="window.logout()" class="text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="log-out" class="w-4 h-4"></i></button>
                     </div>
                 `;
             }
@@ -292,69 +322,100 @@
         }
 
         // 資料同步
+        let unsubscribeSync = null;
         function startDataSync() {
+            if (unsubscribeSync) unsubscribeSync();
+            // 遵循 RULE 1 路徑
             const itemsCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'items');
-            onSnapshot(itemsCol, (snapshot) => {
+            unsubscribeSync = onSnapshot(itemsCol, (snapshot) => {
                 allItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderItems();
+            }, (error) => {
+                console.error("Firestore sync error:", error);
             });
         }
 
         // 圖片轉 Base64
-        document.getElementById('item-image').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                if (file.size > 1024 * 1024) {
-                    alert("檔案請小於 1MB");
-                    return;
+        const imageInput = document.getElementById('item-image');
+        if (imageInput) {
+            imageInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    if (file.size > 1024 * 1024) {
+                        alert("檔案請小於 1MB");
+                        return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        base64Image = event.target.result;
+                        const preview = document.getElementById('image-preview-container');
+                        if (preview) {
+                            preview.innerHTML = `<img src="${base64Image}" class="w-full h-full object-cover">`;
+                        }
+                    };
+                    reader.readAsDataURL(file);
                 }
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    base64Image = event.target.result;
-                    document.getElementById('image-preview-container').innerHTML = `
-                        <img src="${base64Image}" class="w-full h-full object-cover">
-                    `;
-                };
-                reader.readAsDataURL(file);
-            }
-        });
+            });
+        }
 
         // 新增項目
-        document.getElementById('add-item-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const title = document.getElementById('item-title').value;
-            const category = document.getElementById('item-category').value;
-            
-            try {
-                const itemsCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'items');
-                await addDoc(itemsCol, {
-                    title,
-                    category,
-                    image: base64Image,
-                    createdAt: serverTimestamp()
-                });
-                closeModal();
-                e.target.reset();
-                base64Image = "";
-                document.getElementById('image-preview-container').innerHTML = `<i data-lucide="image" class="text-slate-300 mb-2 w-7 h-7"></i><span class="text-xs text-slate-400 font-medium">點擊上傳圖片</span>`;
-                lucide.createIcons();
-            } catch (err) {
-                console.error("Save error", err);
-            }
-        });
+        const addForm = document.getElementById('add-item-form');
+        if (addForm) {
+            addForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (!currentUser) {
+                    alert("身分驗證尚未就緒，請稍後再試。");
+                    return;
+                }
+                const title = document.getElementById('item-title').value;
+                const category = document.getElementById('item-category').value;
+                
+                try {
+                    const itemsCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'items');
+                    await addDoc(itemsCol, {
+                        title,
+                        category,
+                        image: base64Image,
+                        createdAt: serverTimestamp()
+                    });
+                    closeModal();
+                    e.target.reset();
+                    base64Image = "";
+                    document.getElementById('image-preview-container').innerHTML = `<i data-lucide="image" class="text-slate-300 mb-2 w-7 h-7"></i><span class="text-xs text-slate-400 font-medium">點擊上傳圖片</span>`;
+                    lucide.createIcons();
+                } catch (err) {
+                    console.error("Save error:", err);
+                    alert("儲存失敗，請檢查權限或網域授權。");
+                }
+            });
+        }
 
         // 搜尋監聽
-        document.getElementById('search-input').addEventListener('input', renderItems);
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) {
+            searchInput.addEventListener('input', renderItems);
+        }
 
         // 暴露給 window 的函數
-        window.login = () => signInWithPopup(auth, provider);
+        window.login = async () => {
+            try {
+                await signInWithPopup(auth, provider);
+            } catch (err) {
+                if (err.code === 'auth/unauthorized-domain') {
+                    alert("登入失敗：此網域尚未在 Firebase 中授權。請在 Firebase Console -> Authentication -> Settings -> Authorized Domains 加入此網域。");
+                } else {
+                    console.error("Login failed:", err);
+                }
+            }
+        };
         window.logout = () => signOut(auth).then(() => window.location.reload());
         window.setCategory = (name) => {
             currentTab = name;
             updateActiveTabUI();
         };
 
-        // 初始化
+        // 初始化啟動
+        initAuth();
         initCategoryUI();
 
     </script>
